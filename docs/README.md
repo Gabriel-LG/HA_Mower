@@ -13,10 +13,10 @@ The hardware consists of an ESP8266 board, an accelerometer board, a DC/DC conve
 
 I have mounted the hardware onto the battery pack, and soldered it directly to the battery poles (inside the battery housing).\
 In the robot, one (single) wire needs to be spliced into a rain sensor wire. That is all the hardware needed.\
-The mower needs to be configured to mow 24 hours per day. Also the mower needs to be configure to stop mowing if rain is detected and to resume as soon as the rain is over.
+The mower needs to be configured to mow 24 hours per day. Also the mower needs to be configure to stop mowing if rain is detected and to resume as soon as the rain is over. _Consult the manual of your mower with regards to configuration._\
+![image](installed.jpg)
 
 When the is hardware ready, build and upload the provided ESPHome configuration to your ESP board. Your mower should now be ready for action. Make sure you have adequate WiFi coverage on your lawn, or at least to the dock.\
-![image](installed.jpg)
 
 If you have a different mower then some adjustments to the ESPHome configuration may be needed. If you need help, my time is limited, but I will try to help.\
 I have found the people at [Home Assistant community](https://community.home-assistant.io/ "Hello ;)") very responsive and helpful.
