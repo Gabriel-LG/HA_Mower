@@ -1,0 +1,254 @@
+esphome:
+  name: LawnMower
+  friendly_name: "Lawn Mower"
+
+esp8266:
+  board: esp01_1m
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+#api:
+#  encryption:
+#    key: "Fill in your API key here"
+
+#ota:
+#  password: "Fill in your OTA password here"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: HIGH
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  #ap:
+  #  ssid: "Lawn Mower Fallback Hotspot"
+  #  password: "Fill in your fallback AP password here"
+
+captive_portal:
+
+i2c:
+  scl: GPIO5
+  sda: GPIO4
+  scan: true
+
+text_sensor:
+  - platform: template
+    id: status
+    name: status
+    update_interval: 1s
+    lambda: !lambda |-
+      int statusNum = (id(mow)->state?1:0) | (id(moving)->state?2:0) | (id(charging)->state?4:0);
+      std::string value = "Unknown";
+      switch(statusNum)
+      {
+        case 4:
+          value = "Standby";
+          break;
+        case 5:
+          value = "Preparing";
+          break;
+        case 3:
+        case 7:
+          value = "Mowing";
+          break;
+        case 2:
+        case 6:
+          value = "Returning";
+          break;
+        case 0:
+        case 1:
+          value = "Fault";
+          break;
+      }
+      return value;
+
+sensor:
+  - platform: mpu6050
+    id: accelerometer
+    address: 0x68
+    accel_x:
+      id: accel_x
+    accel_y:
+      id: accel_y
+    accel_z:
+      id: accel_z
+    update_interval: never
+  - platform: template
+    disabled_by_default: True
+    icon: "mdi:vibrate"
+    name: "Vibration"
+    id: acc_vibration
+    unit_of_measurement: "m/s²"
+    accuracy_decimals: 3
+    update_interval: 100ms
+    lambda: !lambda |-
+      static constexpr size_t numSamples = 20;
+      static constexpr float movingThreshold = 0.2f; // meters/second^2
+      static float samplesX[numSamples];
+      static float samplesY[numSamples];
+      static float samplesZ[numSamples];
+      static int sample = 0;
+
+      // This Lambda is an alternative for a regular function, allowing it to be declared inline.
+      // This Lambda calculates the Mean Absolute Deviation of all elements in an array.
+      auto mad = [](float (&samples)[numSamples])
+      {
+        float avg = 0;
+        for(auto sample : samples) avg += sample;
+        avg = avg / numSamples;
+        float mad = 0;
+        for(auto sample : samples) mad += fabs(sample - avg);
+        mad = mad / numSamples;
+        return mad;
+      };
+
+      auto& acc = id(accelerometer);
+      if(!acc) return NAN;
+      // Read and store the accelerometer values
+      acc->update();
+      samplesX[sample] = id(accel_x).state;
+      samplesY[sample] = id(accel_y).state;
+      samplesZ[sample] = id(accel_z).state;
+      sample++;
+      if(sample >= numSamples)
+      {
+        // When the sample buffers are full, reset the sample count and update the sensor value
+        sample = 0;
+        // Calculate the MAD of all accelerometer axis.
+        float madX = mad(samplesX);
+        float madY = mad(samplesY);
+        float madZ = mad(samplesZ);
+        // Calculate the Root Sum Square of all MADs
+        float rss = sqrtf(madX*madX + madY*madY + madZ*madZ);
+        id(moving)->publish_state(rss >= movingThreshold);
+        return rss; 
+      }
+      // Return no update
+      return {};
+  - platform: adc
+    pin: GPIO17
+    id: battery_voltage
+    name: "Battery_voltage"
+    disabled_by_default: True
+    filters:
+      - multiply: 24.3
+    update_interval: 1s
+    on_value: 
+      lambda: !lambda |-
+          // Charging state is set when a steep increase of battery voltage is detected.
+          // Or when the Battery voltage is above a specific level
+          // Charging state is cleared when the mower moves.
+          // This is method of detection is needed, becauses the charger floats the battery after it is full.
+          static constexpr float chargingSlopeThreshold = 0.1; // Volts/second
+          static constexpr float chargingThreshold = 20.5; // Volts/second
+          static constexpr int chargingConsistant = 4; // seconds
+          static constexpr float drivingThreshold = 0.2; // meters/second^2
+          static constexpr int drivingConsistant = 6; // seconds //keep vibration update interval in mind here
+          static int chargingTime = 0; //number of seconds that voltage has been above the charging threshold
+          static int movingTime = 0; //number of seconds that vibration has been above the driving threshold
+          static float iir = id(battery_voltage)->state;
+
+          float voltage = id(battery_voltage)->state;
+          float vibration = id(acc_vibration)->state;
+
+          bool isCharging = false;
+          bool isMoving = false;
+
+          if(voltage > chargingThreshold)
+          {
+            isCharging = true;
+          }
+          else if(voltage - iir >= chargingSlopeThreshold)
+          {
+            chargingTime++;
+            isCharging = (chargingTime > chargingConsistant);
+          }
+          else
+          {
+            chargingTime = 0;
+          }
+
+          if(id(moving)->state)
+          {
+            movingTime++;
+            isMoving = (movingTime > drivingConsistant);
+          }
+          else
+          {
+            movingTime = 0;
+          }
+
+          if(isCharging)
+          {
+            id(charging)->publish_state(true);
+          }
+          else if(isMoving)
+          {
+            id(charging)->publish_state(false);
+          }
+
+          iir = 0.1f * voltage + 0.9f * iir;
+
+binary_sensor:
+  - platform: gpio
+    name: "Mower_on"
+    disabled_by_default: True
+    pin: 
+      number: "GPIO16"
+      mode:
+        input: True
+        pulldown: False
+  - platform: template
+    id: charging
+    name: "Charger"
+    device_class: plug
+  - platform: template
+    id: moving
+    name: moving
+    device_class: moving
+
+status_led:
+    pin:
+      number: "GPIO2"
+      inverted: True
+
+switch:
+  - platform: gpio
+    id: mow
+    name: "Mow"
+    pin:
+      inverted: False
+      number: "GPIO13"
+      mode:
+        output: True
+        open_drain: True
+    on_turn_on:
+      then:
+        - script.execute: mowing_timer
+    on_turn_off: 
+      then:
+        - script.stop: mowing_timer
+
+script:
+  - id: mowing_timer
+    then:
+      - delay: !lambda 'return id(mowing_time).state * 60 * 1000;'
+      - switch.turn_off: mow
+
+number:
+  - platform: template
+    name: "Mowing time"
+    id: mowing_time
+    icon: mdi:timer
+    restore_value: True
+    unit_of_measurement: "minutes"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: BOX
+    optimistic: True
+
+
+
