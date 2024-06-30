@@ -34,6 +34,29 @@ captive_portal:
 
 #### End of ESPHome boilerplate ####
 
+substitutions:
+  max_mowing_time: "120" # The maximum allowed mowing time in minutes
+  moving_threshold: "0.2" # The vibration threshold to detect motion in delta m/s^2
+  stand_still_delay: "4000" # The delay before standstill is concluded, in ms (in steps of vibration update interval)
+  moving_delay: "0" # The delay before moving is concluded, in ms (in steps of vibration update interval)
+  acc_update_interval: "100" # The accelerometer update interval in ms (in steps of 100ms)
+  vibration_update_interval: "2000" # The vibration update interval in ms (in steps if acc_update_interval)
+  battery_update_interval: "1000" # the battery voltage update interval in ms (in steps of 100ms)
+  battery_voltage_gain: "24.3" # The ADC voltage multiplication, to obtain the correct battery voltage slope
+  battery_voltage_offset: "0.0" # The ADC voltage offset, to obtain the correct battery voltage, when combined with the gain.
+  battery_filter_weight: "0.9" # Battery voltage Single Pole IIR filter's alpha value (0.0 .. 1.0); changing this number affects the charging slope threshold!
+  charging_threshold: "20.5" # Charging treshold in Volt
+  not_charging_threshold: "18.5" # Not charging treshold in Volt
+  charging_slope_threshold: "0.01" # The charging slope threshold in Volt/battery_update_interval
+  charging_delay: "4000" # The delay before charger connected is concluded, in ms
+  tick_interval: "100" # ms
+
+globals:
+  - # The tick count, used for global time-keeping
+    type: uint32_t
+    id: ticks
+    initial_value: "0"
+
 i2c:
   scl: GPIO5
   sda: GPIO4
@@ -43,7 +66,7 @@ text_sensor:
   - platform: template
     id: status
     name: status
-    update_interval: 1s
+    update_interval: ${tick_interval}ms
     lambda: !lambda |-
       int statusNum = (id(mow)->state?1:0) | (id(moving)->state?2:0) | (id(charging)->state?4:0);
       std::string value = "Unknown";
@@ -68,6 +91,8 @@ text_sensor:
           value = "Fault";
           break;
       }
+
+      id(ticks)++;
       return value;
 
 sensor:
@@ -88,10 +113,11 @@ sensor:
     id: acc_vibration
     unit_of_measurement: "m/s²"
     accuracy_decimals: 3
-    update_interval: 100ms
+    update_interval: ${acc_update_interval}ms
     lambda: !lambda |-
-      static constexpr size_t numSamples = 20;
-      static constexpr float movingThreshold = 0.2f; // meters/second^2
+      static constexpr size_t numSamples = $vibration_update_interval / $tick_interval;
+      static constexpr float movingThreshold = $moving_threshold; // meters/second^2
+
       static float samplesX[numSamples];
       static float samplesY[numSamples];
       static float samplesZ[numSamples];
@@ -117,7 +143,7 @@ sensor:
       {
         static uint32_t delayCount = 0; //number of ticks since a new state is active
         bool currentState = id(moving)->state;
-        bool newState = ( vibration >= $moving_threshold );
+        bool newState = ( vibration >= movingThreshold );
 
         if(newState == currentState)
         {
@@ -168,65 +194,63 @@ sensor:
     name: "Battery_voltage"
     disabled_by_default: True
     filters:
-      - multiply: 24.3
-    update_interval: 1s
+      - multiply: $battery_voltage_gain
+      - offset: $battery_voltage_offset
+    update_interval: ${battery_update_interval}ms
     on_value: 
       lambda: !lambda |-
           // Charging state is set when a steep increase of battery voltage is detected.
           // Or when the Battery voltage is above a specific level
           // Charging state is cleared when the mower moves.
           // This is method of detection is needed, becauses the charger floats the battery after it is full.
-          //NOTE: This lambda assumes an update interval of 1 second!
-          static constexpr float chargingSlopeThreshold = 0.01; // Volts/second
-          static constexpr float chargingThreshold = 20.5; // Volts/second
-          static constexpr int chargingConsistant = 5; // seconds
-          static constexpr int drivingConsistant = 6; // seconds //keep vibration update interval in mind here
-          static int chargingTime = 0; //number of seconds that voltage slope has been above the charging threshold
+          static constexpr int chargingDelay = $charging_delay / $battery_update_interval; // in battery voltage update periods
+          static constexpr int notChargingDelay = $charging_delay / $battery_update_interval; //in battery voltage update periods
+
+          static int chargingCount = 0; //number of updates that charging conditions are met
+          static int notChargingCount = 0; //number of updates that not-charging conditions are met
+
           static int movingTime = 0; //number of seconds that the mower reported moving
           static float iir = id(battery_voltage)->state;
 
           float voltage = id(battery_voltage)->state;
           float vibration = id(acc_vibration)->state;
 
-          bool isCharging = false;
-          bool isMoving = false;
-
           float prevIir = iir;
-          iir = 0.9f * iir + 0.1f * voltage;
+          iir = $battery_filter_weight * iir + (1.0 - $battery_filter_weight) * voltage;
           float slope = iir - prevIir;
 
-          if(voltage > chargingThreshold)
+          if(voltage > $charging_threshold)
           {
-            isCharging = true;
+            chargingCount++;
+            notChargingCount = 0;
           }
-          else if(slope >= chargingSlopeThreshold)
+          else if(slope >= $charging_slope_threshold)
           {
-            chargingTime++;
-            isCharging = (chargingTime > chargingConsistant);
-          }
-          else
-          {
-            chargingTime = 0;
-          }
-
-          if(id(moving)->state)
-          {
-            movingTime++;
-            isMoving = (movingTime > drivingConsistant);
+            chargingCount++;
+            notChargingCount = 0;
           }
           else
           {
-            movingTime = 0;
+            chargingCount = 0;
+            if(voltage < $not_charging_threshold)
+            {
+                notChargingCount++;
+            }
+            else
+            {
+              notChargingCount = 0;
+            }
           }
 
-          if(isCharging)
-          {
-            id(charging)->publish_state(true);
-          }
-          else if(isMoving)
-          {
-            id(charging)->publish_state(false);
-          }
+          bool chargingDetected = (chargingCount >= chargingDelay);
+          bool notChargingDetected = (notChargingCount >= notChargingDelay);
+
+          bool isCharging = id(charging)->state;
+          isCharging |= chargingDetected;
+          isCharging &= !notChargingDetected;
+          isCharging &= !id(moving)->state;
+
+          id(charging)->publish_state(isCharging);
 
 binary_sensor:
   - platform: gpio
@@ -273,6 +297,30 @@ script:
     then:
       - delay: !lambda 'return id(mowing_time).state * 60 * 1000;'
       - switch.turn_off: mow
+  - id: check_parameters
+    then:
+      - lambda: !lambda |-
+          //no need to actually run this lambda; all checks are performed at compile time
+          static_assert($max_mowing_time > 0, "max_mowing_time must be > 0");
+          static_assert($tick_interval > 0, "tick_interval must be > 0");
+          static_assert($vibration_update_interval > 0, "vibration_update_interval must be > 0");
+          static_assert($vibration_update_interval % $tick_interval == 0, "vibration_interval must be a multiple of tick_interval");
+          static_assert($stand_still_delay >= 0, "stand_still_delay must be >= 0");
+          static_assert($stand_still_delay % $vibration_update_interval == 0, "stand_still_delay must be multiple of vibration_interval");
+          static_assert($moving_delay >= 0, "moving_delay must be >= 0");
+          static_assert($moving_delay % $vibration_update_interval == 0, "moving_delay must be multiple of vibration_interval");
+          static_assert($acc_update_interval > 0, "acc_update_interval must be > 0");
+          static_assert($acc_update_interval % $tick_interval == 0, "acc_update_interval must be a multiple of tick_interval");
+          static_assert($battery_voltage_gain > 0, "battery_voltage_gain must be > 0");
+          static_assert($battery_voltage_offset >= 0, "battery_voltage_offset must be >= 0");
+          static_assert($battery_update_interval > 0, "battery_update_interval must be > 0");
+          static_assert($battery_update_interval % $tick_interval == 0, "battery_update_interval must be a multiple of tick_interval");
+          static_assert($battery_filter_weight > 0.0 && $battery_filter_weight < 1.0, "battery_filter_weight must be > 0.0 and < 1.0");
+          static_assert($not_charging_threshold > 0.0, "not_charging_threshold must be > 0.0");
+          static_assert($charging_threshold > $not_charging_threshold, "charging_threshold must be > not_charging_threshold");
+          static_assert($charging_slope_threshold > 0.0, "charging_slope_threshold must be > 0.0");
+          static_assert($charging_delay > 0, "charging_delay must be > 0");
+          static_assert($charging_delay % $battery_update_interval == 0, "charging_delay must be multiple of battery_update_interval");
 
 number:
   - platform: template
@@ -282,7 +330,7 @@ number:
     restore_value: True
     unit_of_measurement: "minutes"
     min_value: 1
-    max_value: 60
+    max_value: $max_mowing_time
     step: 1
     mode: BOX
     optimistic: True
