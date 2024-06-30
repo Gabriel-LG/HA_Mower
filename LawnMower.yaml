@@ -110,6 +110,35 @@ sensor:
         return mad;
       };
 
+      // Update the moving sensor.
+      // This "function" determines whether the robot is moving or standing still.
+      // It does so, based on the moving_threshold, moving_delay and stand_still_delay configuration parameters.
+      auto update_moving = [](float vibration)
+      {
+        static uint32_t delayCount = 0; //number of ticks since a new state is active
+        bool currentState = id(moving)->state;
+        bool newState = ( vibration >= $moving_threshold );
+
+        if(newState == currentState)
+        {
+          delayCount = 0;
+        }
+        else if( newState && (delayCount >= $moving_delay/$vibration_update_interval) )
+        {
+          delayCount = 0;
+          id(moving).publish_state(true);
+        }
+        else if( !newState && (delayCount >= $stand_still_delay/$vibration_update_interval) )
+        {
+          delayCount = 0;
+          id(moving).publish_state(false);
+        }
+        else
+        {
+          delayCount++;
+        }
+      };
+
       auto& acc = id(accelerometer);
       if(!acc) return NAN;
       // Read and store the accelerometer values
@@ -128,7 +157,7 @@ sensor:
         float madZ = mad(samplesZ);
         // Calculate the Root Sum Square of all MADs
         float rss = sqrtf(madX*madX + madY*madY + madZ*madZ);
-        id(moving)->publish_state(rss >= movingThreshold);
+        update_moving(rss);
         return rss; 
       }
       // Return no update
