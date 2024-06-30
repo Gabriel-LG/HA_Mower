@@ -34,6 +34,27 @@ captive_portal:
 
 #### End of ESPHome boilerplate ####
 
+substitutions:
+  max_mowing_time: "120" # The maximum allowed mowing time in minutes
+  moving_threshold: "0.2" # The vibration threshold to detect motion in delta m/s^2
+  stand_still_delay: "4000" # The delay before standstill is concluded, in ms (in steps of vibration update interval)
+  moving_delay: "0" # The delay before moving is concluded, in ms (in steps of vibration update interval)
+  acc_update_interval: "100" # The accelerometer update interval in ms (in steps of 100ms)
+  vibration_update_interval: "2000" # The vibration update interval in ms (in steps if acc_update_interval)
+  battery_update_interval: "1000" # the battery voltage update interval in ms (in steps of 100ms)
+  iir_alpha: "0.1" # Battery voltage Single Pole IIR filter's alpha value (0.0 .. 1.0)
+  charging_threshold: "20.5" # The charging treshold in Volt
+  not_charging_threshold: "18.5" # The charging treshold in Volt
+  charging_slope_threshold: "0.01" # The charging slope threshold in Volt/second
+  charging_delay: "4000" # The delay before charger connected is concluded, in ms
+  tick_interval: "100" # ms
+
+globals:
+  - # The tick count, used for global time-keeping
+    type: uint32_t
+    id: ticks
+    initial_value: "0"
+
 i2c:
   scl: GPIO5
   sda: GPIO4
@@ -43,7 +64,7 @@ text_sensor:
   - platform: template
     id: status
     name: status
-    update_interval: 1s
+    update_interval: ${tick_interval}ms
     lambda: !lambda |-
       int statusNum = (id(mow)->state?1:0) | (id(moving)->state?2:0) | (id(charging)->state?4:0);
       std::string value = "Unknown";
@@ -68,6 +89,8 @@ text_sensor:
           value = "Fault";
           break;
       }
+
+      id(ticks)++;
       return value;
 
 sensor:
@@ -253,7 +276,7 @@ number:
     restore_value: True
     unit_of_measurement: "minutes"
     min_value: 1
-    max_value: 60
+    max_value: $max_mowing_time
     step: 1
     mode: BOX
     optimistic: True
