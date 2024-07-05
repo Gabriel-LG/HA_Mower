@@ -92,6 +92,12 @@ text_sensor:
           break;
       }
 
+      //This quick fix prevents the mower from starting in Fault state
+      if( !id(charging)->has_state() || !id(moving)->has_state() )
+      {
+        value = "Unknown";
+      }
+
       id(ticks)++;
       return value;
 
@@ -145,7 +151,7 @@ sensor:
         bool currentState = id(moving)->state;
         bool newState = ( vibration >= movingThreshold );
 
-        if(newState == currentState)
+        if(newState == currentState && id(moving)->has_state())
         {
           delayCount = 0;
         }
@@ -245,12 +251,21 @@ sensor:
           bool chargingDetected = (chargingCount >= chargingDelay);
           bool notChargingDetected = (notChargingCount >= notChargingDelay);
 
-          bool isCharging = id(charging)->state;
-          isCharging |= chargingDetected;
-          isCharging &= !notChargingDetected;
-          isCharging &= !id(moving)->state;
-
-          id(charging)->publish_state(isCharging);
+          //Only update the charging state, if the charging state is certain.
+          //This will prevent an incorrect state after booting.
+          if(id(moving)->state)
+          {
+            chargingCount = 0;
+            id(charging)->publish_state(false);
+          }
+          else if(chargingDetected)
+          {
+            id(charging)->publish_state(true);
+          }
+          else if(notChargingDetected)
+          {
+            id(charging)->publish_state(false);
+          }
 
 binary_sensor:
   - platform: gpio
