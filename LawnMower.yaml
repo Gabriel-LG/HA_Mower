@@ -203,6 +203,7 @@ sensor:
       - multiply: $battery_voltage_gain
       - offset: $battery_voltage_offset
     update_interval: ${battery_update_interval}ms
+    force_update: True # Not removing duplicate values, is conveniant for spreadsheet (filter) calculations.
     on_value: 
       lambda: !lambda |-
           // Charging state is set when a steep increase of battery voltage is detected.
