@@ -38,7 +38,7 @@ substitutions:
   max_mowing_time: "120" # The maximum allowed mowing time in minutes
   moving_threshold: "0.2" # The vibration threshold to detect motion in delta m/s^2
   stand_still_delay: "4000" # The delay before standstill is concluded, in ms (in steps of vibration update interval)
-  moving_delay: "0" # The delay before moving is concluded, in ms (in steps of vibration update interval)
+  moving_delay: "2000" # The delay before moving is concluded, in ms (in steps of vibration update interval)
   acc_update_interval: "100" # The accelerometer update interval in ms (in steps of 100ms)
   vibration_update_interval: "2000" # The vibration update interval in ms (in steps if acc_update_interval)
   battery_update_interval: "1000" # the battery voltage update interval in ms (in steps of 100ms)
